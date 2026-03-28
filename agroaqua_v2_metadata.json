@@ -1,0 +1,280 @@
+{
+  "version": "2.0",
+  "model_name": "LightGBM",
+  "model_file": "agroaqua_v2_model.pkl",
+  "feature_columns": [
+    "crop_type",
+    "soil_type",
+    "growth_stage",
+    "irrigation_method",
+    "temperature",
+    "humidity",
+    "rainfall",
+    "wind_speed",
+    "solar_radiation",
+    "soil_moisture",
+    "row_spacing_cm",
+    "plant_spacing_cm",
+    "plant_density",
+    "canopy_cover",
+    "kc",
+    "irrigation_efficiency"
+  ],
+  "categorical_features": [
+    "crop_type",
+    "soil_type",
+    "growth_stage",
+    "irrigation_method"
+  ],
+  "numerical_features": [
+    "temperature",
+    "humidity",
+    "rainfall",
+    "wind_speed",
+    "solar_radiation",
+    "soil_moisture",
+    "row_spacing_cm",
+    "plant_spacing_cm",
+    "plant_density",
+    "canopy_cover",
+    "kc",
+    "irrigation_efficiency"
+  ],
+  "target": "irrigation_need_mm",
+  "metrics": {
+    "R2": 0.9933,
+    "RMSE": 0.4228,
+    "MAE": 0.2413
+  },
+  "best_params": {
+    "subsample": 0.8,
+    "reg_lambda": 5.0,
+    "reg_alpha": 1.0,
+    "num_leaves": 63,
+    "n_estimators": 500,
+    "max_depth": -1,
+    "learning_rate": 0.1,
+    "colsample_bytree": 0.7
+  },
+  "crops": [
+    "wheat",
+    "corn",
+    "rice",
+    "tomato",
+    "olive",
+    "alfalfa",
+    "citrus",
+    "potato"
+  ],
+  "soils": [
+    "sandy",
+    "loam",
+    "clay_loam",
+    "clay",
+    "silt"
+  ],
+  "irrigation_methods": [
+    "drip",
+    "sprinkler",
+    "flood",
+    "center_pivot"
+  ],
+  "growth_stages": [
+    "initial",
+    "development",
+    "mid_season",
+    "late_season"
+  ],
+  "label_encodings": {
+    "crop_type": {
+      "alfalfa": 0,
+      "citrus": 1,
+      "corn": 2,
+      "olive": 3,
+      "potato": 4,
+      "rice": 5,
+      "tomato": 6,
+      "wheat": 7
+    },
+    "soil_type": {
+      "clay": 0,
+      "clay_loam": 1,
+      "loam": 2,
+      "sandy": 3,
+      "silt": 4
+    },
+    "growth_stage": {
+      "development": 0,
+      "initial": 1,
+      "late_season": 2,
+      "mid_season": 3
+    },
+    "irrigation_method": {
+      "center_pivot": 0,
+      "drip": 1,
+      "flood": 2,
+      "sprinkler": 3
+    }
+  },
+  "soil_properties": {
+    "sandy": {
+      "field_capacity": 15.0,
+      "wilting_point": 5.0
+    },
+    "loam": {
+      "field_capacity": 30.0,
+      "wilting_point": 12.0
+    },
+    "clay_loam": {
+      "field_capacity": 38.0,
+      "wilting_point": 18.0
+    },
+    "clay": {
+      "field_capacity": 42.0,
+      "wilting_point": 22.0
+    },
+    "silt": {
+      "field_capacity": 35.0,
+      "wilting_point": 15.0
+    }
+  },
+  "crop_kc": {
+    "wheat": {
+      "initial": 0.3,
+      "development": 0.7,
+      "mid_season": 1.15,
+      "late_season": 0.4
+    },
+    "corn": {
+      "initial": 0.3,
+      "development": 0.75,
+      "mid_season": 1.2,
+      "late_season": 0.6
+    },
+    "rice": {
+      "initial": 1.05,
+      "development": 1.1,
+      "mid_season": 1.2,
+      "late_season": 0.9
+    },
+    "tomato": {
+      "initial": 0.6,
+      "development": 0.8,
+      "mid_season": 1.15,
+      "late_season": 0.8
+    },
+    "olive": {
+      "initial": 0.5,
+      "development": 0.55,
+      "mid_season": 0.65,
+      "late_season": 0.55
+    },
+    "alfalfa": {
+      "initial": 0.4,
+      "development": 0.8,
+      "mid_season": 1.2,
+      "late_season": 1.05
+    },
+    "citrus": {
+      "initial": 0.65,
+      "development": 0.65,
+      "mid_season": 0.7,
+      "late_season": 0.65
+    },
+    "potato": {
+      "initial": 0.5,
+      "development": 0.8,
+      "mid_season": 1.15,
+      "late_season": 0.75
+    }
+  },
+  "crop_spacing_ranges": {
+    "wheat": {
+      "row_spacing_cm": [
+        12,
+        25
+      ],
+      "plant_spacing_cm": [
+        3,
+        10
+      ]
+    },
+    "corn": {
+      "row_spacing_cm": [
+        60,
+        90
+      ],
+      "plant_spacing_cm": [
+        20,
+        35
+      ]
+    },
+    "rice": {
+      "row_spacing_cm": [
+        20,
+        30
+      ],
+      "plant_spacing_cm": [
+        15,
+        25
+      ]
+    },
+    "tomato": {
+      "row_spacing_cm": [
+        60,
+        150
+      ],
+      "plant_spacing_cm": [
+        30,
+        80
+      ]
+    },
+    "olive": {
+      "row_spacing_cm": [
+        400,
+        800
+      ],
+      "plant_spacing_cm": [
+        400,
+        800
+      ]
+    },
+    "alfalfa": {
+      "row_spacing_cm": [
+        15,
+        30
+      ],
+      "plant_spacing_cm": [
+        5,
+        15
+      ]
+    },
+    "citrus": {
+      "row_spacing_cm": [
+        400,
+        700
+      ],
+      "plant_spacing_cm": [
+        300,
+        600
+      ]
+    },
+    "potato": {
+      "row_spacing_cm": [
+        60,
+        90
+      ],
+      "plant_spacing_cm": [
+        25,
+        40
+      ]
+    }
+  },
+  "irrigation_efficiencies": {
+    "drip": 0.92,
+    "sprinkler": 0.75,
+    "flood": 0.55,
+    "center_pivot": 0.85
+  },
+  "mad_fraction": 0.5
+}

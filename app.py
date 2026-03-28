@@ -1,258 +1,363 @@
-# ═══════════════════════════════════════════════════════════════
-# Agricultural Water Needs Prediction API
-# Flask backend that loads the trained ML model and serves predictions
-# ═══════════════════════════════════════════════════════════════
+"""
+AgroAqua V2 — Flask API for Irrigation Need Prediction
+Deployed on Render: https://water-api-y5bd.onrender.com
 
+Endpoints:
+  POST /predict  — Predict irrigation need (mm/day) + MAD alert + volumes
+  GET  /health   — Health check
+  GET  /info     — Model info, supported crops/soils/methods
+"""
+
+import os
+import json
+import numpy as np
+import joblib
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import joblib
-import numpy as np
-import pandas as pd
-from datetime import datetime
-import os
+
+# ============================================================
+# APP SETUP
+# ============================================================
 
 app = Flask(__name__)
+CORS(app)
 
-# ── CORS Configuration ──
-# In development: allow all origins
-# In production: replace with your Lovable URL
-ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '*')
-if ALLOWED_ORIGINS == '*':
-    CORS(app)
-else:
-    CORS(app, origins=ALLOWED_ORIGINS.split(','))
+# ============================================================
+# LOAD MODEL & METADATA
+# ============================================================
 
-# ── Load Model & Encoders at Startup ──
-MODEL_DIR = os.environ.get('MODEL_DIR', '.')
+MODEL_PATH = os.environ.get("MODEL_PATH", "agroaqua_v2_model.pkl")
+ENCODERS_PATH = os.environ.get("ENCODERS_PATH", "agroaqua_v2_encoders.pkl")
+METADATA_PATH = os.environ.get("METADATA_PATH", "agroaqua_v2_metadata.json")
 
-print("Loading model and encoders...")
-model = joblib.load(os.path.join(MODEL_DIR, 'water_model.pkl'))
-le_crop = joblib.load(os.path.join(MODEL_DIR, 'encoder_crop.pkl'))
-le_soil = joblib.load(os.path.join(MODEL_DIR, 'encoder_soil.pkl'))
-le_stage = joblib.load(os.path.join(MODEL_DIR, 'encoder_stage.pkl'))
-le_irrig = joblib.load(os.path.join(MODEL_DIR, 'encoder_irrig.pkl'))
-feature_cols = joblib.load(os.path.join(MODEL_DIR, 'feature_cols.pkl'))
-metadata = joblib.load(os.path.join(MODEL_DIR, 'model_metadata.pkl'))
-print(f"✅ Model loaded: {metadata['model_type']} (R²={metadata['test_r2']:.4f})")
+model = joblib.load(MODEL_PATH)
+label_encoders = joblib.load(ENCODERS_PATH)
 
+with open(METADATA_PATH, "r") as f:
+    metadata = json.load(f)
 
-@app.route('/', methods=['GET'])
-def home():
-    """Landing page with API info."""
-    return jsonify({
-        'name': 'Agricultural Water Needs Prediction API',
-        'version': '1.0',
-        'status': 'running',
-        'endpoints': {
-            '/predict': 'POST — predict water needs',
-            '/health': 'GET — check API health',
-            '/info': 'GET — model info and valid input values',
-        }
-    })
+FEATURE_COLUMNS = metadata["feature_columns"]
+CATEGORICAL_FEATURES = metadata["categorical_features"]
 
+print(f"[AgroAqua V2] Model loaded: {metadata['model_name']}")
+print(f"[AgroAqua V2] R²={metadata['metrics']['R2']}, RMSE={metadata['metrics']['RMSE']}")
 
-@app.route('/health', methods=['GET'])
-def health():
-    """Health check endpoint."""
-    return jsonify({
-        'status': 'healthy',
-        'model_loaded': True,
-        'model_type': metadata['model_type'],
-        'test_r2': metadata['test_r2'],
-        'test_mae': metadata['test_mae'],
-    })
+# ============================================================
+# SCIENTIFIC CONSTANTS
+# ============================================================
 
+CROPS = {
+    "wheat":   {"kc": [0.30, 0.70, 1.15, 0.40], "row_spacing_range": [12, 25],   "plant_spacing_range": [3, 10]},
+    "corn":    {"kc": [0.30, 0.75, 1.20, 0.60], "row_spacing_range": [60, 90],   "plant_spacing_range": [20, 35]},
+    "rice":    {"kc": [1.05, 1.10, 1.20, 0.90], "row_spacing_range": [20, 30],   "plant_spacing_range": [15, 25]},
+    "tomato":  {"kc": [0.60, 0.80, 1.15, 0.80], "row_spacing_range": [60, 150],  "plant_spacing_range": [30, 80]},
+    "olive":   {"kc": [0.50, 0.55, 0.65, 0.55], "row_spacing_range": [400, 800], "plant_spacing_range": [400, 800]},
+    "alfalfa": {"kc": [0.40, 0.80, 1.20, 1.05], "row_spacing_range": [15, 30],   "plant_spacing_range": [5, 15]},
+    "citrus":  {"kc": [0.65, 0.65, 0.70, 0.65], "row_spacing_range": [400, 700], "plant_spacing_range": [300, 600]},
+    "potato":  {"kc": [0.50, 0.80, 1.15, 0.75], "row_spacing_range": [60, 90],   "plant_spacing_range": [25, 40]},
+}
 
-@app.route('/info', methods=['GET'])
-def info():
-    """Return valid input values so the frontend can populate dropdowns."""
-    return jsonify({
-        'crops': list(le_crop.classes_),
-        'soil_types': list(le_soil.classes_),
-        'growth_stages': list(le_stage.classes_),
-        'irrigation_methods': list(le_irrig.classes_),
-        'input_ranges': {
-            'temp_max': {'min': -5, 'max': 50, 'unit': '°C'},
-            'temp_min': {'min': -10, 'max': 40, 'unit': '°C'},
-            'humidity': {'min': 5, 'max': 100, 'unit': '%'},
-            'wind_speed': {'min': 0, 'max': 15, 'unit': 'm/s'},
-            'solar_radiation': {'min': 2, 'max': 35, 'unit': 'MJ/m²/day'},
-            'rainfall': {'min': 0, 'max': 100, 'unit': 'mm/day'},
-            'soil_moisture': {'min': 0, 'max': 50, 'unit': '%'},
-            'field_area_ha': {'min': 0.1, 'max': 500, 'unit': 'hectares'},
-        },
-        'model_accuracy': {
-            'MAE': f"{metadata['test_mae']:.3f} mm/day",
-            'R2': f"{metadata['test_r2']:.4f}",
-            'RMSE': f"{metadata['test_rmse']:.3f} mm/day",
-        }
-    })
+SOILS = {
+    "sandy":     {"field_capacity": 15.0, "wilting_point": 5.0},
+    "loam":      {"field_capacity": 30.0, "wilting_point": 12.0},
+    "clay_loam": {"field_capacity": 38.0, "wilting_point": 18.0},
+    "clay":      {"field_capacity": 42.0, "wilting_point": 22.0},
+    "silt":      {"field_capacity": 35.0, "wilting_point": 15.0},
+}
+
+IRRIGATION_METHODS = {
+    "drip": 0.92,
+    "sprinkler": 0.75,
+    "flood": 0.55,
+    "center_pivot": 0.85,
+}
+
+GROWTH_STAGES = ["initial", "development", "mid_season", "late_season"]
+GROWTH_STAGE_INDEX = {stage: i for i, stage in enumerate(GROWTH_STAGES)}
+
+CANOPY_STAGE_FACTOR = {
+    "initial": 0.15,
+    "development": 0.50,
+    "mid_season": 0.90,
+    "late_season": 0.70,
+}
+
+MAD_FRACTION = 0.50
 
 
-@app.route('/predict', methods=['POST'])
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def compute_canopy_cover(row_spacing_cm, plant_spacing_cm, growth_stage):
+    """Compute canopy cover and plant density from spacing."""
+    row_m = row_spacing_cm / 100.0
+    plant_m = plant_spacing_cm / 100.0
+    density = 10000.0 / (row_m * plant_m)
+    density_norm = min(max(np.log10(density + 1) / 6.0, 0.05), 1.0)
+    stage_factor = CANOPY_STAGE_FACTOR[growth_stage]
+    cover = min(max(density_norm * stage_factor, 0.05), 0.98)
+    return cover, density
+
+
+def compute_mad_threshold(field_capacity, wilting_point):
+    """MAD threshold = FC - 50% * (FC - WP)"""
+    available_water = field_capacity - wilting_point
+    return field_capacity - MAD_FRACTION * available_water
+
+
+def validate_input(data):
+    """Validate all required fields and return errors if any."""
+    errors = []
+
+    required_fields = [
+        "crop_type", "soil_type", "growth_stage", "irrigation_method",
+        "temperature", "humidity", "rainfall", "wind_speed", "solar_radiation",
+        "soil_moisture", "row_spacing_cm", "plant_spacing_cm",
+    ]
+
+    for field in required_fields:
+        if field not in data:
+            errors.append(f"Missing required field: {field}")
+
+    if errors:
+        return errors
+
+    # Validate categorical values
+    if data["crop_type"] not in CROPS:
+        errors.append(f"Invalid crop_type: {data['crop_type']}. Must be one of: {list(CROPS.keys())}")
+    if data["soil_type"] not in SOILS:
+        errors.append(f"Invalid soil_type: {data['soil_type']}. Must be one of: {list(SOILS.keys())}")
+    if data["growth_stage"] not in GROWTH_STAGES:
+        errors.append(f"Invalid growth_stage: {data['growth_stage']}. Must be one of: {GROWTH_STAGES}")
+    if data["irrigation_method"] not in IRRIGATION_METHODS:
+        errors.append(f"Invalid irrigation_method: {data['irrigation_method']}. Must be one of: {list(IRRIGATION_METHODS.keys())}")
+
+    # Validate numeric ranges
+    numeric_checks = {
+        "temperature": (-10, 55),
+        "humidity": (0, 100),
+        "rainfall": (0, 200),
+        "wind_speed": (0, 30),
+        "solar_radiation": (0, 40),
+        "soil_moisture": (0, 60),
+        "row_spacing_cm": (1, 1000),
+        "plant_spacing_cm": (1, 1000),
+    }
+
+    for field, (low, high) in numeric_checks.items():
+        val = data.get(field)
+        if val is not None:
+            try:
+                val = float(val)
+                if val < low or val > high:
+                    errors.append(f"{field} must be between {low} and {high}, got {val}")
+            except (ValueError, TypeError):
+                errors.append(f"{field} must be a number, got {val}")
+
+    return errors
+
+
+# ============================================================
+# ENDPOINTS
+# ============================================================
+
+@app.route("/predict", methods=["POST"])
 def predict():
     """
-    Main prediction endpoint.
-    
-    Expected JSON body:
+    Predict irrigation need.
+
+    Required JSON body:
     {
-        "crop_type": "wheat",
-        "growth_stage": "mid_season",
-        "temp_max": 38.0,
-        "temp_min": 22.0,
-        "humidity": 35.0,
-        "wind_speed": 3.2,
-        "solar_radiation": 25.0,
-        "rainfall": 0.0,
+        "crop_type": "tomato",
         "soil_type": "clay_loam",
-        "soil_moisture": 28.0,
-        "field_area_ha": 2.0,
-        "irrigation_method": "drip"
+        "growth_stage": "mid_season",
+        "irrigation_method": "drip",
+        "temperature": 38.0,
+        "humidity": 25.0,
+        "rainfall": 0.0,
+        "wind_speed": 3.5,
+        "solar_radiation": 28.0,
+        "soil_moisture": 22.0,
+        "row_spacing_cm": 100,
+        "plant_spacing_cm": 50,
+        "field_area_ha": 2.0  (optional, default=1.0)
     }
     """
     try:
         data = request.get_json()
 
-        # ── Validate required fields ──
-        required_fields = [
-            'crop_type', 'growth_stage', 'temp_max', 'temp_min',
-            'humidity', 'wind_speed', 'solar_radiation', 'rainfall',
-            'soil_type', 'soil_moisture', 'field_area_ha', 'irrigation_method'
-        ]
-        missing = [f for f in required_fields if f not in data]
-        if missing:
-            return jsonify({'error': f'Missing fields: {missing}'}), 400
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
 
-        # ── Validate categorical values ──
-        if data['crop_type'] not in le_crop.classes_:
-            return jsonify({'error': f"Invalid crop_type: '{data['crop_type']}'. Valid: {list(le_crop.classes_)}"}), 400
-        if data['soil_type'] not in le_soil.classes_:
-            return jsonify({'error': f"Invalid soil_type: '{data['soil_type']}'. Valid: {list(le_soil.classes_)}"}), 400
-        if data['growth_stage'] not in le_stage.classes_:
-            return jsonify({'error': f"Invalid growth_stage: '{data['growth_stage']}'. Valid: {list(le_stage.classes_)}"}), 400
-        if data['irrigation_method'] not in le_irrig.classes_:
-            return jsonify({'error': f"Invalid irrigation_method: '{data['irrigation_method']}'. Valid: {list(le_irrig.classes_)}"}), 400
+        # Validate input
+        errors = validate_input(data)
+        if errors:
+            return jsonify({"error": "Validation failed", "details": errors}), 400
 
-        # ── Validate numeric ranges ──
-        if not (-10 <= float(data['temp_min']) <= float(data['temp_max']) <= 55):
-            return jsonify({'error': 'temp_min must be <= temp_max, both between -10 and 55°C'}), 400
-        if not (0 <= float(data['humidity']) <= 100):
-            return jsonify({'error': 'humidity must be between 0 and 100%'}), 400
-        if float(data['rainfall']) < 0:
-            return jsonify({'error': 'rainfall cannot be negative'}), 400
-        if float(data['field_area_ha']) <= 0:
-            return jsonify({'error': 'field_area_ha must be positive'}), 400
+        # Extract values
+        crop_name = data["crop_type"]
+        soil_name = data["soil_type"]
+        growth_stage = data["growth_stage"]
+        irrig_method = data["irrigation_method"]
+        field_area_ha = float(data.get("field_area_ha", 1.0))
 
-        # ── Encode categorical inputs ──
-        crop_enc = le_crop.transform([data['crop_type']])[0]
-        soil_enc = le_soil.transform([data['soil_type']])[0]
-        stage_enc = le_stage.transform([data['growth_stage']])[0]
-        irrig_enc = le_irrig.transform([data['irrigation_method']])[0]
+        crop = CROPS[crop_name]
+        soil = SOILS[soil_name]
+        fc = soil["field_capacity"]
+        wp = soil["wilting_point"]
 
-        # ── Compute derived features ──
-        temp_max = float(data['temp_max'])
-        temp_min = float(data['temp_min'])
-        humidity = float(data['humidity'])
-        wind_speed = float(data['wind_speed'])
-        solar_radiation = float(data['solar_radiation'])
-        rainfall = float(data['rainfall'])
-        soil_moisture = float(data['soil_moisture'])
-        field_area_ha = float(data['field_area_ha'])
+        # Derived features
+        kc = crop["kc"][GROWTH_STAGE_INDEX[growth_stage]]
+        efficiency = IRRIGATION_METHODS[irrig_method]
+        canopy_cover, plant_density = compute_canopy_cover(
+            float(data["row_spacing_cm"]),
+            float(data["plant_spacing_cm"]),
+            growth_stage,
+        )
 
-        temp_range = temp_max - temp_min
-        temp_mean = (temp_max + temp_min) / 2
-        vpd = (0.6108 * np.exp(17.27 * temp_max / (temp_max + 237.3))) * (1 - humidity / 100)
+        # Build feature dict
+        features = {
+            "crop_type": crop_name,
+            "soil_type": soil_name,
+            "growth_stage": growth_stage,
+            "irrigation_method": irrig_method,
+            "temperature": float(data["temperature"]),
+            "humidity": float(data["humidity"]),
+            "rainfall": float(data["rainfall"]),
+            "wind_speed": float(data["wind_speed"]),
+            "solar_radiation": float(data["solar_radiation"]),
+            "soil_moisture": float(data["soil_moisture"]),
+            "row_spacing_cm": float(data["row_spacing_cm"]),
+            "plant_spacing_cm": float(data["plant_spacing_cm"]),
+            "plant_density": plant_density,
+            "canopy_cover": canopy_cover,
+            "kc": kc,
+            "irrigation_efficiency": efficiency,
+        }
 
-        if rainfall <= 0:
-            effective_rain = 0
-        elif rainfall < 20:
-            effective_rain = rainfall * 0.8
-        elif rainfall < 50:
-            effective_rain = max(0, rainfall * 0.7 - 2)
-        else:
-            effective_rain = rainfall * 0.5
+        # Encode categoricals
+        for col in CATEGORICAL_FEATURES:
+            features[col] = int(label_encoders[col].transform([features[col]])[0])
 
-        aridity = temp_max / (rainfall + 1)
-        heat_index = temp_max * humidity / 100
-        wind_temp = wind_speed * temp_mean
-        solar_humidity_ratio = solar_radiation / (humidity + 1)
+        # Build feature array in correct order
+        X_input = np.array([[features[col] for col in FEATURE_COLUMNS]])
 
-        today = datetime.now()
-        month = today.month
-        day_of_year = today.timetuple().tm_yday
-        season_sin = float(np.sin(2 * np.pi * day_of_year / 365))
-        season_cos = float(np.cos(2 * np.pi * day_of_year / 365))
+        # Predict
+        irrigation_mm = float(model.predict(X_input)[0])
+        irrigation_mm = max(0.0, round(irrigation_mm, 2))
 
-        # ── Build feature array in exact training order ──
-        features = pd.DataFrame([{
-            'temp_max': temp_max,
-            'temp_min': temp_min,
-            'humidity': humidity,
-            'wind_speed': wind_speed,
-            'solar_radiation': solar_radiation,
-            'rainfall': rainfall,
-            'soil_moisture': soil_moisture,
-            'field_area_ha': field_area_ha,
-            'crop_encoded': crop_enc,
-            'soil_encoded': soil_enc,
-            'stage_encoded': stage_enc,
-            'irrig_encoded': irrig_enc,
-            'temp_range': temp_range,
-            'temp_mean': temp_mean,
-            'vpd': vpd,
-            'effective_rain': effective_rain,
-            'aridity': aridity,
-            'heat_index': heat_index,
-            'wind_temp': wind_temp,
-            'solar_humidity_ratio': solar_humidity_ratio,
-            'month': month,
-            'day_of_year': day_of_year,
-            'season_sin': season_sin,
-            'season_cos': season_cos,
-        }])[feature_cols]
+        # Volume conversions (field_area_ha only used here, NOT as model feature)
+        volume_liters = round(irrigation_mm * field_area_ha * 10000, 0)
+        volume_m3 = round(volume_liters / 1000, 2)
 
-        # ── Predict ──
-        water_mm = float(model.predict(features)[0])
-        water_mm = max(0, water_mm)  # Can't be negative
+        # MAD alert
+        mad_threshold = compute_mad_threshold(fc, wp)
+        soil_moisture = float(data["soil_moisture"])
+        is_below_mad = soil_moisture < mad_threshold
 
-        area_m2 = field_area_ha * 10000
-        volume_liters = water_mm * area_m2
-        volume_m3 = volume_liters / 1000
+        # Response
+        response = {
+            "prediction": {
+                "irrigation_need_mm_per_day": irrigation_mm,
+                "volume_liters": volume_liters,
+                "volume_m3": volume_m3,
+                "field_area_ha": field_area_ha,
+            },
+            "crop_info": {
+                "crop_type": crop_name,
+                "kc": kc,
+                "growth_stage": growth_stage,
+                "plant_density_per_ha": round(plant_density, 0),
+                "canopy_cover": round(canopy_cover, 3),
+                "row_spacing_cm": float(data["row_spacing_cm"]),
+                "plant_spacing_cm": float(data["plant_spacing_cm"]),
+            },
+            "soil_info": {
+                "soil_type": soil_name,
+                "soil_moisture": soil_moisture,
+                "field_capacity": fc,
+                "wilting_point": wp,
+            },
+            "irrigation_info": {
+                "method": irrig_method,
+                "efficiency": efficiency,
+            },
+            "mad_alert": {
+                "is_below_mad": is_below_mad,
+                "mad_threshold": round(mad_threshold, 1),
+                "soil_moisture": soil_moisture,
+                "message": (
+                    f"URGENT: Soil moisture ({soil_moisture}%) is below "
+                    f"MAD threshold ({mad_threshold:.1f}%). Irrigate immediately!"
+                    if is_below_mad else
+                    f"Soil moisture ({soil_moisture}%) is above "
+                    f"MAD threshold ({mad_threshold:.1f}%). No urgent irrigation needed."
+                ),
+                "severity": "critical" if is_below_mad else "ok",
+            },
+            "model_info": {
+                "version": metadata["version"],
+                "model_name": metadata["model_name"],
+            },
+        }
 
-        # ── Response ──
-        return jsonify({
-            'water_need_mm': round(water_mm, 2),
-            'volume_liters': round(volume_liters, 0),
-            'volume_m3': round(volume_m3, 1),
-            'recommendation': get_recommendation(water_mm, data['irrigation_method']),
-            'input_summary': {
-                'crop': data['crop_type'],
-                'stage': data['growth_stage'],
-                'area_ha': field_area_ha,
-                'irrigation': data['irrigation_method'],
-            }
-        })
+        return jsonify(response), 200
 
     except Exception as e:
-        return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-def get_recommendation(water_mm, irrigation_method):
-    """Generate a human-readable irrigation recommendation."""
-    if water_mm < 1:
-        return "Very low water demand. Light irrigation or skip today if soil moisture is adequate."
-    elif water_mm < 3:
-        return "Moderate water demand. Standard irrigation cycle recommended."
-    elif water_mm < 6:
-        return "High water demand. Ensure full irrigation cycle. Consider early morning application to reduce evaporation loss."
-    elif water_mm < 10:
-        return "Very high water demand. Maximum irrigation needed. Monitor soil moisture closely and consider splitting into two applications."
-    else:
-        return "Extreme water demand. Critical irrigation needed. Check for heat stress and ensure irrigation system is at full capacity."
+@app.route("/health", methods=["GET"])
+def health():
+    """Health check endpoint."""
+    return jsonify({
+        "status": "healthy",
+        "version": metadata["version"],
+        "model": metadata["model_name"],
+    }), 200
 
 
-# ── Start Server ──
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    debug = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
-    app.run(host='0.0.0.0', port=port, debug=debug)
+@app.route("/info", methods=["GET"])
+def info():
+    """Return model info, supported crops, soils, methods, and spacing ranges."""
+    return jsonify({
+        "version": metadata["version"],
+        "model_name": metadata["model_name"],
+        "metrics": metadata["metrics"],
+        "supported_crops": list(CROPS.keys()),
+        "supported_soils": list(SOILS.keys()),
+        "supported_irrigation_methods": list(IRRIGATION_METHODS.keys()),
+        "supported_growth_stages": GROWTH_STAGES,
+        "crop_kc_values": {
+            name: {stage: kc for stage, kc in zip(GROWTH_STAGES, crop["kc"])}
+            for name, crop in CROPS.items()
+        },
+        "crop_spacing_ranges": {
+            name: {
+                "row_spacing_cm": crop["row_spacing_range"],
+                "plant_spacing_cm": crop["plant_spacing_range"],
+            }
+            for name, crop in CROPS.items()
+        },
+        "soil_properties": SOILS,
+        "irrigation_efficiencies": IRRIGATION_METHODS,
+        "mad_fraction": MAD_FRACTION,
+        "features_required": [
+            "crop_type", "soil_type", "growth_stage", "irrigation_method",
+            "temperature", "humidity", "rainfall", "wind_speed", "solar_radiation",
+            "soil_moisture", "row_spacing_cm", "plant_spacing_cm",
+        ],
+        "optional_fields": {
+            "field_area_ha": "Field area in hectares (default: 1.0). Used only for volume conversion, NOT as model feature.",
+        },
+    }), 200
+
+
+# ============================================================
+# RUN
+# ============================================================
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
